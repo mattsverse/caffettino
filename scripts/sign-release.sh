@@ -95,10 +95,26 @@ if json.load(open(sys.argv[1])).get("status") != "Accepted":
 ' "$result"
 }
 
+# Stapling fetches the ticket from Apple's CloudKit CDN, which can drop
+# connections or lag behind a just-accepted notarization. Retry with backoff.
+staple() {
+  local target="$1" attempt delay=15
+  for attempt in 1 2 3 4 5; do
+    if xcrun stapler staple "$target"; then
+      return 0
+    fi
+    if [[ "$attempt" == 5 ]]; then break; fi
+    echo "Stapling failed (attempt $attempt/5); retrying in ${delay}s" >&2
+    sleep "$delay"
+    delay=$((delay * 2))
+  done
+  return 1
+}
+
 # A temporary transport archive lets us staple the app before making the DMG.
 ditto -c -k --keepParent "$app" "$private_dir/app.zip"
 notarize "$private_dir/app.zip" app
-xcrun stapler staple "$app"
+staple "$app"
 xcrun stapler validate "$app"
 spctl --assess --type execute --verbose=2 "$app"
 
@@ -113,7 +129,7 @@ hdiutil create -volname Caffettino -srcfolder "$private_dir/image" -fs APFS -for
 hdiutil verify "$dmg"
 codesign --sign "$identity" --keychain "$keychain" --timestamp "$dmg"
 notarize "$dmg" dmg
-xcrun stapler staple "$dmg"
+staple "$dmg"
 xcrun stapler validate "$dmg"
 codesign --verify --strict --verbose=2 "$dmg"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
