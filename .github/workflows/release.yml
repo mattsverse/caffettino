@@ -1,0 +1,168 @@
+name: Release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Existing version tag to build and distribute
+        type: string
+        required: true
+    secrets:
+      APPLE_CERTIFICATE_P12:
+        required: true
+      APPLE_CERTIFICATE_PASSWORD:
+        required: true
+      APPLE_ID:
+        required: true
+      APPLE_TEAM_ID:
+        required: true
+      APPLE_APP_SPECIFIC_PASSWORD:
+        required: true
+      HOMEBREW_TAP_TOKEN:
+        required: true
+      RELEASE_PLEASE_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build or retry (for example v0.1.0)
+        type: string
+        required: true
+
+# Serialize releases so two tags cannot race to update the cask.
+concurrency:
+  group: caffettino-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+      CARGO_BUILD_JOBS: "2"
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+      - name: Validate version and check for an existing release
+        id: metadata
+        run: |
+          version="$(python3 scripts/release.py version --tag "$RELEASE_TAG")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # A failing API request fails the job, rather than masquerading as a missing release.
+          draft="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[] | select(.tag_name == env.RELEASE_TAG) | .draft')"
+          case "$draft" in
+            false) state=published ;;
+            true) state=draft ;;
+            '') state=missing ;;
+            *) echo "Unexpected release state: $draft" >&2; exit 1 ;;
+          esac
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+      - name: Install Rust
+        if: steps.metadata.outputs.state != 'published'
+        run: |
+          rustup toolchain install 1.96.0 --profile minimal --component rustfmt --component clippy
+          rustup override set 1.96.0
+      - name: Check and build
+        if: steps.metadata.outputs.state != 'published'
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+          bash scripts/bundle.sh
+      - name: Sign, notarize, and create the DMG
+        if: steps.metadata.outputs.state != 'published'
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: bash scripts/sign-release.sh
+      - name: Publish immutable release assets
+        if: steps.metadata.outputs.state != 'published'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+          RELEASE_STATE: ${{ steps.metadata.outputs.state }}
+        run: |
+          dmg="Caffettino-$VERSION-arm64.dmg"
+          python3 scripts/release.py cask --dmg "dist/$dmg" \
+            --repository "$GITHUB_REPOSITORY" --output dist/caffettino.rb
+          (cd dist && shasum -a 256 "$dmg" > SHA256SUMS)
+          if [[ "$RELEASE_STATE" == missing ]]; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --draft --title "Caffettino $VERSION" --generate-notes
+          fi
+          # Replacing assets is allowed only while the release is still a draft.
+          [[ "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" == true ]]
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "dist/$dmg" dist/SHA256SUMS dist/caffettino.rb
+          release_id="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)"
+          # Let GitHub choose the highest stable version if an older release is retried.
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            --field draft=false --raw-field make_latest=legacy --silent
+
+  homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      VERSION: ${{ needs.release.outputs.version }}
+      TAP_REPOSITORY: mattsverse/homebrew-tap
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+      - name: Download and verify published artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir dist
+          dmg="Caffettino-$VERSION-arm64.dmg"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir dist \
+            --pattern "$dmg" --pattern SHA256SUMS --pattern caffettino.rb
+          (cd dist && sha256sum --check SHA256SUMS)
+          python3 scripts/release.py cask --dmg "dist/$dmg" \
+            --repository "$GITHUB_REPOSITORY" --output dist/expected.rb
+          cmp dist/caffettino.rb dist/expected.rb
+      - name: Update Homebrew tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          [[ -n "$GH_TOKEN" ]] || { echo 'Set the HOMEBREW_TAP_TOKEN repository secret.' >&2; exit 1; }
+          gh auth setup-git --hostname github.com
+          gh repo clone "$TAP_REPOSITORY" tap -- --depth 1
+          branch="$(git -C tap branch --show-current)"
+          git -C tap config user.name 'github-actions[bot]'
+          git -C tap config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          for attempt in 1 2 3; do
+            git -C tap fetch origin "$branch"
+            git -C tap reset --hard FETCH_HEAD
+            python3 scripts/release.py install-cask --source dist/caffettino.rb --tap tap
+            git -C tap add Casks/caffettino.rb
+            if git -C tap diff --cached --quiet; then
+              echo 'The tap is already up to date.'
+              exit 0
+            fi
+            git -C tap commit -m "caffettino $VERSION"
+            if git -C tap push origin "HEAD:$branch"; then exit 0; fi
+            echo "Push attempt $attempt failed; fetching before retry."
+          done
+          echo 'Could not update the tap after three attempts.' >&2
+          exit 1

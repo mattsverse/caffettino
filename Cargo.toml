@@ -1,0 +1,27 @@
+[package]
+name = "caffettino"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+description = "A tiny coffee break for your Mac's sleep schedule"
+license = "MIT"
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+
+[dependencies]
+rune = { git = "https://github.com/anomalyco/rune", rev = "7ead7d63fcf6f9dd9669385a8b90e2ae80015d7b", default-features = false, features = ["accessibility", "metal-backend"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tray-icon = { version = "=0.26.1", default-features = false }
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSThread"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAccessibilityProtocols", "NSButton", "NSControl", "NSMenu", "NSStatusItem", "NSStatusBarButton", "NSView"] }
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+strip = true
+
