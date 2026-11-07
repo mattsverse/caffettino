@@ -5,10 +5,15 @@ A tiny, whimsical macOS menu bar app that buys your Mac a coffee. Built with
 your Mac is caffeinated.
 
 - Click **Brew a little focus** to start; **Let it snooze** to stop.
-- Pick a 25-minute, one-hour, or unlimited coffee break before starting.
-- Tab enters the selected duration; arrow keys change it, and Space presses a button.
+- Pick a coffee break before starting: a saved preset (25 minutes and one hour
+  at first) or **Until I stop**.
+- Pick **+** to type any whole number of minutes (1–1440). Return brews it once;
+  **Save as preset** (⌘S) keeps it. Up to three presets fit, always shortest
+  first. **Remove** deletes the selected preset.
+- Tab enters the selected duration; arrow keys change it, Tab from **+** reaches
+  the minutes field, and Space presses a button.
 - **Left-click the menu bar cup** to start or stop the selected break.
-- **Right-click the cup** to start/stop, open the window, or quit.
+- **Right-click the cup** to pick a break, start/stop, open the window, or quit.
 - Keyboard or VoiceOver activation of the menu bar cup opens the same menu.
 - Closing the window keeps the app in the menu bar. Escape or ⌘W closes it;
   ⌘Q or **Quit Caffettino** quits and releases its sleep assertions.
@@ -55,6 +60,25 @@ Stopping or quitting kills and reaps only its owned child. The `-w` parent watch
 also releases assertions if Caffettino crashes or is force-quit. Existing
 `caffeinate` processes are left alone. Breaks start off and aren't restored on
 relaunch. The app doesn't install a login item.
+
+Presets and the selected break are kept in
+`~/Library/Application Support/com.matteogassend.caffettino/presets.json`:
+
+```json
+{
+  "version": 1,
+  "presets": [25, 60],
+  "selected": 25
+}
+```
+
+`presets` are minutes; `selected` is minutes, or `null` for **Until I stop**. A
+selected time that isn't a preset is a one-off break, brought back in the **+**
+field (never running). You can edit the file by hand, but quit Caffettino first:
+it reads the file only at launch and rewrites it after each change. Durations
+outside 1–1440, duplicates and presets past the three shortest are ignored. A
+file that can't be read is left alone; Caffettino starts with the defaults and,
+at its next change, keeps your file as `presets.json.bad`.
 
 Rune is pinned to a specific pre-release revision in `Cargo.toml`. Its native
 macOS tray backend is not implemented at that revision, so `tray-icon` supplies

@@ -1,5 +1,5 @@
 //! The native adapter Rune currently lacks on macOS. All methods run on the UI thread.
-use crate::{CoffeeBreak, State};
+use crate::{CoffeeBreak, Selection, State};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
@@ -15,7 +15,7 @@ use std::cell::{Cell, RefCell};
 use std::f32::consts::TAU;
 use tray_icon::{
     Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
-    menu::{ContextMenu, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, ContextMenu, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 
 struct MenuActivationIvars {
@@ -140,10 +140,103 @@ impl Steam {
     }
 }
 
+/// Menu position of the first break item: after the status line and its separator.
+const FIRST_BREAK: usize = 2;
+const BREAK_ID: &str = "break:";
+
+/// One checkable break in the menu: its id suffix and title.
+#[derive(Clone, PartialEq, Eq)]
+struct BreakItem {
+    id: String,
+    title: String,
+}
+
+/// The breaks the menu lists, and which one is checked.
+fn break_items(state: &State) -> (Vec<BreakItem>, Option<usize>) {
+    let mut items: Vec<_> = state
+        .presets
+        .minutes()
+        .iter()
+        .map(|&minutes| CoffeeBreak::Timed(minutes))
+        .chain([CoffeeBreak::Unlimited])
+        .map(|coffee_break| BreakItem {
+            id: break_id(coffee_break),
+            title: coffee_break.label(),
+        })
+        .collect();
+    let checked = match state.selection {
+        Selection::Break(selected) => {
+            let id = break_id(selected);
+            items.iter().position(|item| item.id == id)
+        }
+        Selection::Custom => state.coffee_break().map(|custom| {
+            items.push(BreakItem {
+                id: "custom".into(),
+                title: format!("{} (custom)", custom.label()),
+            });
+            items.len() - 1
+        }),
+    };
+    (items, checked)
+}
+
+fn break_id(coffee_break: CoffeeBreak) -> String {
+    match coffee_break {
+        CoffeeBreak::Timed(minutes) => minutes.to_string(),
+        CoffeeBreak::Unlimited => "unlimited".into(),
+    }
+}
+
+fn select_from_menu(state: &mut State, id: &str) {
+    match id {
+        "unlimited" => state.select_break(CoffeeBreak::Unlimited),
+        "custom" => state.select(Selection::Custom),
+        minutes => {
+            if let Ok(minutes) = minutes.parse() {
+                state.select_break(CoffeeBreak::Timed(minutes));
+            }
+        }
+    }
+    // AppKit flips a check item when it's picked, even when the selection stays put.
+    state.sync_tray();
+}
+
+/// Routes the cup's left-click and the menu's items to the app.
+fn set_event_handlers(handle: AppHandle<State>) {
+    let click_handle = handle.clone();
+    TrayIconEvent::set_event_handler(Some(move |event| {
+        if matches!(
+            event,
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            }
+        ) {
+            click_handle.update(State::toggle);
+        }
+    }));
+    MenuEvent::set_event_handler(Some(move |event: MenuEvent| match event.id.as_ref() {
+        "toggle" => handle.update(State::toggle),
+        "show" => handle.open(),
+        "quit" => handle.quit(),
+        id => {
+            if let Some(id) = id.strip_prefix(BREAK_ID) {
+                let id = id.to_owned();
+                handle.update(move |state: &mut State, _: &mut rune::Tx| {
+                    select_from_menu(state, &id);
+                });
+            }
+        }
+    }));
+}
+
 pub struct CoffeeTray {
     icon: TrayIcon,
+    menu: Menu,
     status: MenuItem,
     toggle: MenuItem,
+    breaks: RefCell<Vec<(BreakItem, CheckMenuItem)>>,
     steam: Retained<Steam>,
     // NSControl's target is weak; keep it alive as long as the tray exists.
     _activation: Retained<MenuActivation>,
@@ -167,6 +260,7 @@ impl CoffeeTray {
         menu.append_items(&[
             &status,
             &PredefinedMenuItem::separator(),
+            &PredefinedMenuItem::separator(),
             &toggle,
             &show,
             &PredefinedMenuItem::separator(),
@@ -183,7 +277,7 @@ impl CoffeeTray {
             .with_id("caffettino")
             .with_icon_templated(Icon::from_rgba(idle_pixels, ICON_PIXELS, ICON_PIXELS)?)
             .with_tooltip("Caffettino • Resting\nClick to brew. Right-click for the menu.")
-            .with_menu(Box::new(menu))
+            .with_menu(Box::new(menu.clone()))
             .with_menu_on_left_click(false)
             .build()?;
         let status_item = icon
@@ -206,25 +300,7 @@ impl CoffeeTray {
         };
         button.setAccessibilityLabel(Some(&NSString::from_str("Caffettino")));
         button.setAccessibilityHelp(Some(&NSString::from_str("Open the coffee break menu")));
-        let click_handle = handle.clone();
-        TrayIconEvent::set_event_handler(Some(move |event| {
-            if matches!(
-                event,
-                TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    ..
-                }
-            ) {
-                click_handle.update(State::toggle);
-            }
-        }));
-        MenuEvent::set_event_handler(Some(move |event: MenuEvent| match event.id.as_ref() {
-            "toggle" => handle.update(State::toggle),
-            "show" => handle.open(),
-            "quit" => handle.quit(),
-            _ => {}
-        }));
+        set_event_handlers(handle);
         let frames = (0..STEAM_FRAMES)
             .map(|frame| {
                 let phase = f32::from(frame) / f32::from(STEAM_FRAMES);
@@ -255,14 +331,17 @@ impl CoffeeTray {
         }
         Ok(Self {
             icon,
+            menu,
             status,
             toggle,
+            breaks: RefCell::new(Vec::new()),
             steam,
             _activation: activation,
         })
     }
 
-    pub fn update(&self, active: bool, coffee_break: CoffeeBreak) {
+    pub fn update(&self, state: &State) {
+        let active = state.active();
         self.status.set_text(if active {
             "Your Mac is wide awake"
         } else {
@@ -273,12 +352,47 @@ impl CoffeeTray {
         } else {
             "Brew a coffee"
         });
-        let state = if active { "Awake" } else { "Resting" };
+        let (items, checked) = break_items(state);
+        self.sync_breaks(items);
+        for (index, (_, item)) in self.breaks.borrow().iter().enumerate() {
+            item.set_checked(checked == Some(index));
+            // Like the window, the running break can't change until it's stopped.
+            item.set_enabled(!active);
+        }
+        let state_text = if active { "Awake" } else { "Resting" };
+        let selected = state
+            .coffee_break()
+            .map_or_else(|| "Custom".into(), CoffeeBreak::label);
         let _ = self.icon.set_tooltip(Some(format!(
-            "Caffettino • {state} • {}\nClick to toggle. Right-click for the menu.",
-            coffee_break.label()
+            "Caffettino • {state_text} • {selected}\nClick to toggle. Right-click for the menu."
         )));
         self.steam.set_brewing(active);
+    }
+
+    /// Rebuilds the break items only when the list itself changed.
+    fn sync_breaks(&self, items: Vec<BreakItem>) {
+        let mut breaks = self.breaks.borrow_mut();
+        if breaks.iter().map(|(item, _)| item).eq(items.iter()) {
+            return;
+        }
+        for (_, old) in breaks.drain(..) {
+            if let Err(error) = self.menu.remove(&old) {
+                eprintln!("Caffettino tray: {error}");
+            }
+        }
+        for (offset, item) in items.into_iter().enumerate() {
+            let check = CheckMenuItem::with_id(
+                format!("{BREAK_ID}{}", item.id),
+                &item.title,
+                true,
+                false,
+                None,
+            );
+            if let Err(error) = self.menu.insert(&check, FIRST_BREAK + offset) {
+                eprintln!("Caffettino tray: {error}");
+            }
+            breaks.push((item, check));
+        }
     }
 }
 
