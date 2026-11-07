@@ -68,6 +68,9 @@ def cask_text(version, checksum, repository):
   depends_on arch: :arm64
   depends_on macos: ">= :ventura"
 
+  # Caffettino updates itself in place; `brew upgrade` leaves it to that.
+  auto_updates true
+
   app "Caffettino.app"
 
   uninstall quit: "{bundle_identifier}"

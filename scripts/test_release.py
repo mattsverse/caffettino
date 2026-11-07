@@ -44,6 +44,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn(f'sha256 "{checksum}"', text)
         self.assertIn("/mattsverse/caffettino/releases/download/v#{version}/Caffettino-#{version}-arm64.dmg", text)
         self.assertIn('app "Caffettino.app"', text)
+        self.assertIn("auto_updates true", text)
         self.assertIn("depends_on arch: :arm64", text)
         self.assertIn('depends_on macos: ">= :ventura"', text)
         self.assertIn('uninstall quit: "com.example.caffettino"', text)

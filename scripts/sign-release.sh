@@ -117,6 +117,8 @@ notarize "$private_dir/app.zip" app
 staple "$app"
 xcrun stapler validate "$app"
 spctl --assess --type execute --verbose=2 "$app"
+# The in-app updater installs this archive of the stapled app.
+ditto -c -k --keepParent "$app" "$PWD/dist/Caffettino-$version-arm64.zip"
 
 mkdir "$private_dir/image"
 chmod 755 "$private_dir/image"
