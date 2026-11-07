@@ -4,29 +4,34 @@ use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CoffeeBreak {
-    Short,
-    Hour,
+    /// A break of this many whole minutes.
+    Timed(u32),
     #[default]
     Unlimited,
 }
 
 impl CoffeeBreak {
-    pub const ALL: [Self; 3] = [Self::Short, Self::Hour, Self::Unlimited];
-
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::Short => "25 min",
-            Self::Hour => "1 hour",
-            Self::Unlimited => "Until I stop",
+            Self::Timed(minutes) => format_minutes(u64::from(minutes)),
+            Self::Unlimited => "Until I stop".into(),
         }
     }
 
     pub fn seconds(self) -> Option<u64> {
         match self {
-            Self::Short => Some(25 * 60),
-            Self::Hour => Some(60 * 60),
+            Self::Timed(minutes) => Some(u64::from(minutes) * 60),
             Self::Unlimited => None,
         }
+    }
+}
+
+/// "25 min", "1 h", "1 h 30": short enough for a segment, the tray and the status line.
+pub fn format_minutes(minutes: u64) -> String {
+    match (minutes / 60, minutes % 60) {
+        (0, minutes) => format!("{minutes} min"),
+        (hours, 0) => format!("{hours} h"),
+        (hours, minutes) => format!("{hours} h {minutes:02}"),
     }
 }
 
@@ -109,6 +114,24 @@ impl Drop for Caffeine {
     }
 }
 
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+
+    #[test]
+    fn durations_read_as_minutes_then_hours() {
+        assert_eq!(format_minutes(1), "1 min");
+        assert_eq!(format_minutes(25), "25 min");
+        assert_eq!(format_minutes(60), "1 h");
+        assert_eq!(format_minutes(90), "1 h 30");
+        assert_eq!(format_minutes(65), "1 h 05");
+        assert_eq!(format_minutes(1440), "24 h");
+        assert_eq!(CoffeeBreak::Timed(40).label(), "40 min");
+        assert_eq!(CoffeeBreak::Unlimited.label(), "Until I stop");
+        assert_eq!(CoffeeBreak::Timed(40).seconds(), Some(2400));
+    }
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
@@ -120,9 +143,9 @@ mod tests {
             .spawn()
             .unwrap();
         let mut caffeine = Caffeine::default();
-        caffeine.start(CoffeeBreak::Short).unwrap();
+        caffeine.start(CoffeeBreak::Timed(25)).unwrap();
         let pid = caffeine.child.as_ref().unwrap().id();
-        caffeine.start(CoffeeBreak::Hour).unwrap();
+        caffeine.start(CoffeeBreak::Timed(60)).unwrap();
         assert_eq!(caffeine.child.as_ref().unwrap().id(), pid);
         assert_eq!(caffeine.minutes_left(), Some(25));
         caffeine.stop().unwrap();
@@ -141,7 +164,7 @@ mod tests {
         caffeine.child.as_mut().unwrap().wait().unwrap();
         assert!(caffeine.refresh().unwrap());
         assert!(!caffeine.active());
-        caffeine.start(CoffeeBreak::Hour).unwrap();
+        caffeine.start(CoffeeBreak::Timed(60)).unwrap();
         assert!(caffeine.active());
     }
 

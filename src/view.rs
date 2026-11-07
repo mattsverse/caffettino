@@ -1,6 +1,8 @@
-use crate::{CoffeeBreak, State};
+use crate::{CoffeeBreak, Selection, State};
 use rune::tok::{TextStyle, motion};
-use rune::{Color, Cursor, Cx, El, LineCap, Path, Shape, canvas, col, el, row, text};
+use rune::{
+    Color, Cursor, Cx, El, LineCap, Path, Shape, canvas, col, el, row, spacer, text, text_input,
+};
 
 pub const SIZE: (f32, f32) = (380.0, 600.0);
 // sRGB #faf6ed, decoded to Rune's linear color space.
@@ -134,6 +136,28 @@ fn cup(awake: bool) -> Shape {
     shape.view_box(220.0, 200.0)
 }
 
+/// One radio segment of the duration row.
+fn segment(key: String, text: &str, name: &str, selected: bool, active: bool) -> El {
+    el().key(key)
+        .role("radio")
+        .checked(selected)
+        .focus_selected(selected)
+        .label(name)
+        .disabled(active)
+        .focusable(!active)
+        .h_full()
+        .radius(9.0)
+        .center()
+        .fill(if selected { PAPER } else { Color::TRANSPARENT })
+        .cursor(if active {
+            Cursor::Default
+        } else {
+            Cursor::Pointer
+        })
+        .motion(motion::SNAPPY)
+        .child(label(text, 12.0, if selected { 600.0 } else { 450.0 }, INK))
+}
+
 fn duration_selector(state: &State) -> El {
     let active = state.active();
     let mut durations = row()
@@ -146,37 +170,117 @@ fn duration_selector(state: &State) -> El {
         .gap(4.0)
         .radius(13.0)
         .fill(CREAM);
-    for (index, coffee_break) in CoffeeBreak::ALL.into_iter().enumerate() {
-        let selected = coffee_break == state.coffee_break;
+    let breaks = state
+        .presets
+        .minutes()
+        .iter()
+        .copied()
+        .map(CoffeeBreak::Timed)
+        .chain([CoffeeBreak::Unlimited]);
+    for (index, coffee_break) in breaks.enumerate() {
+        let text = coffee_break.label();
+        let selected = state.selection == Selection::Break(coffee_break);
         durations = durations.child(
-            el().key(format!("duration-{index}"))
-                .role("radio")
-                .checked(selected)
-                .focus_selected(selected)
-                .label(coffee_break.label())
-                .disabled(active)
-                .focusable(!active)
+            segment(format!("duration-{index}"), &text, &text, selected, active)
                 .grow(1.0)
-                .h_full()
-                .radius(9.0)
-                .center()
-                .fill(if selected { PAPER } else { Color::TRANSPARENT })
-                .cursor(if active {
-                    Cursor::Default
-                } else {
-                    Cursor::Pointer
-                })
-                .motion(motion::SNAPPY)
-                .on_press(move |s: &mut State| s.select_break(coffee_break))
-                .child(label(
-                    coffee_break.label(),
-                    12.0,
-                    if selected { 600.0 } else { 450.0 },
-                    INK,
-                )),
+                .on_press(move |s: &mut State| s.select_break(coffee_break)),
         );
     }
-    durations
+    let custom = state.selection == Selection::Custom;
+    durations.child(
+        segment(
+            "duration-custom".into(),
+            "+",
+            "Custom duration",
+            custom,
+            active,
+        )
+        .w(34.0)
+        .on_press(|s: &mut State| s.select(Selection::Custom)),
+    )
+}
+
+fn duration_heading(state: &State) -> El {
+    let heading = row().w_full().h(16.0).center_y().child(label(
+        if state.active() {
+            "THIS COFFEE BREAK"
+        } else {
+            "KEEP ME COMPANY FOR"
+        },
+        10.0,
+        600.0,
+        MUTED,
+    ));
+    match state.removable() {
+        Some(minutes) => heading.child(spacer()).child(
+            el().key("remove-preset")
+                .role("button")
+                .label(format!(
+                    "Remove the {} preset",
+                    CoffeeBreak::Timed(minutes).label()
+                ))
+                .focusable(true)
+                .cursor(Cursor::Pointer)
+                .on_press(State::remove_preset)
+                .child(label("Remove", 10.0, 600.0, COFFEE)),
+        ),
+        None => heading,
+    }
+}
+
+/// The "+" segment's minutes field and Save button.
+fn custom_editor(state: &State) -> El {
+    let active = state.active();
+    let can_save = state.savable().is_some();
+    row()
+        .key("custom-editor")
+        .w_full()
+        .h(36.0)
+        .gap(8.0)
+        .child(
+            text_input(&state.custom, TextStyle::new(13.0, 450.0))
+                .key("custom-minutes")
+                .label("Custom minutes")
+                .single_line()
+                .placeholder("Minutes, 1–1440", MUTED)
+                .caret(INK, CREAM)
+                .color(INK)
+                .disabled(active)
+                .on_edit(|s: &mut State| &mut s.custom)
+                // The tray lists the typed duration as its "(custom)" break.
+                .on_input_change(|s: &mut State, _| s.sync_tray())
+                .on_submit(State::toggle)
+                .grow(1.0)
+                .h_full()
+                .px(12.0)
+                .py(9.0)
+                .radius(9.0)
+                .fill(CREAM),
+        )
+        .child(
+            el().key("save-preset")
+                .role("button")
+                .label("Save as preset")
+                .disabled(!can_save)
+                .focusable(can_save)
+                .h_full()
+                .px(12.0)
+                .radius(9.0)
+                .center()
+                .fill(if can_save { COFFEE } else { CREAM })
+                .cursor(if can_save {
+                    Cursor::Pointer
+                } else {
+                    Cursor::Default
+                })
+                .on_press(State::save_preset)
+                .child(label(
+                    "Save as preset",
+                    12.0,
+                    600.0,
+                    if can_save { PAPER } else { MUTED },
+                )),
+        )
 }
 
 fn brew_button(active: bool) -> El {
@@ -237,6 +341,17 @@ fn footer(active: bool) -> El {
 
 pub fn view(state: &State, _: &mut Cx<State>) -> El {
     let active = state.active();
+    let editing = state.selection == Selection::Custom;
+    // The cup gives up room to the custom editor, so the window keeps its size.
+    let cup_scale = if editing { 0.8 } else { 1.0 };
+    let mut duration = col()
+        .w_full()
+        .gap(8.0)
+        .child(duration_heading(state))
+        .child(duration_selector(state));
+    if editing {
+        duration = duration.child(custom_editor(state));
+    }
     col()
         .key("root")
         .w_full()
@@ -255,14 +370,15 @@ pub fn view(state: &State, _: &mut Cx<State>) -> El {
         .child(
             col()
                 .w_full()
-                .h(215.0)
+                .h(if editing { 171.0 } else { 215.0 })
                 .radius(24.0)
                 .fill(rgb(0xf2_ea_db))
                 .center()
+                .motion(motion::CALM)
                 .child(
                     canvas(cup(active))
                         .key("cup")
-                        .size(220.0, 200.0)
+                        .size(220.0 * cup_scale, 200.0 * cup_scale)
                         .rotate(if active { -0.035 } else { 0.035 })
                         .motion(motion::CALM),
                 ),
@@ -304,22 +420,7 @@ pub fn view(state: &State, _: &mut Cx<State>) -> El {
                 ))
                 .child(label(state.detail(), 11.5, 450.0, MUTED).key("detail")),
         )
-        .child(
-            col()
-                .w_full()
-                .gap(8.0)
-                .child(label(
-                    if active {
-                        "THIS COFFEE BREAK"
-                    } else {
-                        "KEEP ME COMPANY FOR"
-                    },
-                    10.0,
-                    600.0,
-                    MUTED,
-                ))
-                .child(duration_selector(state)),
-        )
+        .child(duration)
         .child(brew_button(active))
         .child(footer(active))
 }
