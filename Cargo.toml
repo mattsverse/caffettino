@@ -17,8 +17,8 @@ rune = { git = "https://github.com/anomalyco/rune", rev = "7ead7d63fcf6f9dd96693
 [target.'cfg(target_os = "macos")'.dependencies]
 tray-icon = { version = "=0.26.1", default-features = false }
 objc2 = "0.6.5"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSThread"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAccessibilityProtocols", "NSButton", "NSControl", "NSMenu", "NSStatusItem", "NSStatusBarButton", "NSView"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDate", "NSGeometry", "NSNotification", "NSObject", "NSString", "NSThread", "NSTimer"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAccessibility", "NSAccessibilityProtocols", "NSBitmapImageRep", "NSButton", "NSControl", "NSGraphics", "NSImage", "NSImageRep", "NSMenu", "NSStatusItem", "NSStatusBarButton", "NSResponder", "NSView", "NSWindow", "NSWorkspace"] }
 
 [profile.release]
 opt-level = "s"
