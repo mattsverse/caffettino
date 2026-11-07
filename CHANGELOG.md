@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.0](https://github.com/mattsverse/caffettino/compare/v0.1.0...v0.2.0) (2026-11-07)
+
+
+### Features
+
+* custom durations and saved presets ([dc6352b](https://github.com/mattsverse/caffettino/commit/dc6352b8ca030c34c077130b79b81924f70450a9))
+* self-update from GitHub releases ([d943261](https://github.com/mattsverse/caffettino/commit/d9432610426c1f33052a0579c5c436ad0669ea2d))
+
 ## 0.1.0 (2026-11-07)
 
 
