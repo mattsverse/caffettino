@@ -2,12 +2,39 @@ mod caffeine;
 mod presets;
 #[cfg(target_os = "macos")]
 mod tray;
+mod updater;
 mod view;
 
 use caffeine::{Caffeine, CoffeeBreak, format_minutes};
 use presets::{Presets, Saved, Store, parse_minutes};
 use rune::{App, AppHandle, AppSpec, Key, KeyEvent, TextEdit, Tx, WindowOptions};
+use std::path::PathBuf;
 use std::time::Duration;
+use updater::{Release, Version};
+
+/// How long scheduled update checks wait between attempts.
+const UPDATE_INTERVAL: Duration = Duration::from_hours(6);
+
+/// A release newer than the running build, and how far installing it has come.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Update {
+    /// Can be installed in place.
+    Available(Release),
+    /// Couldn't be installed in place; the release page has it.
+    Manual(Release),
+    Installing(Version),
+    /// Installed; restarting `app` finishes the update.
+    Ready(Version, PathBuf),
+}
+
+impl Update {
+    fn version(&self) -> Version {
+        match self {
+            Self::Available(release) | Self::Manual(release) => release.version,
+            Self::Installing(version) | Self::Ready(version, _) => *version,
+        }
+    }
+}
 
 /// What the duration row has selected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +67,17 @@ struct State {
     #[cfg(target_os = "macos")]
     tray: Option<tray::CoffeeTray>,
     tray_attempted: bool,
+    updates: Updates,
+}
+
+#[derive(Default)]
+struct Updates {
+    latest: Option<Update>,
+    checking: bool,
+    /// Whether the running check was asked for, so its answer is shown even when it's "none".
+    manual: bool,
+    /// The answer to an update check or install the user asked for.
+    message: Option<String>,
 }
 
 impl State {
@@ -210,6 +248,161 @@ impl State {
         }
     }
 
+    /// What the tray item and window's update button do next.
+    fn update_action(&mut self, tx: &mut Tx) {
+        match self.updates.latest.clone() {
+            None => self.check_for_updates(true),
+            Some(Update::Available(_)) => self.install_update(),
+            Some(Update::Manual(release)) => {
+                if let Err(error) = tx.open_url(&release.url) {
+                    eprintln!("Caffettino update: couldn't open {}: {error}", release.url);
+                }
+            }
+            Some(Update::Installing(_)) => {}
+            Some(Update::Ready(_, app)) => self.restart_to_update(&app, tx),
+        }
+    }
+
+    fn check_for_updates(&mut self, manual: bool) {
+        if self.updates.checking || matches!(self.updates.latest, Some(Update::Installing(_))) {
+            return;
+        }
+        let Some(handle) = self.handle.clone() else {
+            return;
+        };
+        self.updates.checking = true;
+        self.updates.manual = manual;
+        if manual {
+            self.updates.message = None;
+        }
+        std::thread::spawn(move || {
+            let checked = updater::check();
+            handle.update(move |state: &mut State, _: &mut Tx| state.update_checked(checked));
+        });
+        self.sync_tray();
+    }
+
+    fn update_checked(&mut self, checked: std::io::Result<Option<Release>>) {
+        self.updates.checking = false;
+        let manual = std::mem::take(&mut self.updates.manual);
+        match checked {
+            Ok(Some(release)) => {
+                let installable = updater::can_install(&release);
+                self.found(release, installable);
+            }
+            Ok(None) if manual => {
+                self.updates.message = Some(format!(
+                    "Caffettino {} is the latest.",
+                    updater::current_version()
+                ));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("Caffettino update check: {error}");
+                if manual {
+                    self.updates.message = Some("Couldn't check for updates.".into());
+                }
+            }
+        }
+        if manual {
+            self.open_window();
+        }
+        self.sync_tray();
+    }
+
+    /// Records a release newer than the running build, unless it or a newer one is known.
+    fn found(&mut self, release: Release, installable: bool) {
+        if self
+            .updates
+            .latest
+            .as_ref()
+            .is_some_and(|known| known.version() >= release.version)
+        {
+            return;
+        }
+        self.updates.message = None;
+        self.updates.latest = Some(if installable {
+            Update::Available(release)
+        } else {
+            Update::Manual(release)
+        });
+    }
+
+    /// Swaps in the available update off the UI thread, then offers to restart into it.
+    fn install_update(&mut self) {
+        let Some(Update::Available(release)) = self.updates.latest.clone() else {
+            return;
+        };
+        let Some(handle) = self.handle.clone() else {
+            return;
+        };
+        self.updates.latest = Some(Update::Installing(release.version));
+        self.updates.message = None;
+        std::thread::spawn(move || {
+            let installed = updater::install(&release);
+            handle.update(move |state: &mut State, _: &mut Tx| {
+                state.installed(release, installed);
+            });
+        });
+        self.sync_tray();
+    }
+
+    fn installed(&mut self, release: Release, installed: std::io::Result<PathBuf>) {
+        match installed {
+            Ok(app) => self.updates.latest = Some(Update::Ready(release.version, app)),
+            Err(error) => {
+                eprintln!("Caffettino update install: {error}");
+                self.updates.message = Some(format!(
+                    "Couldn't install {}. Download it instead.",
+                    release.version
+                ));
+                self.updates.latest = Some(Update::Manual(release));
+            }
+        }
+        self.open_window();
+        self.sync_tray();
+    }
+
+    /// Starts the new build once this one has quit and released its sleep assertions.
+    fn restart_to_update(&mut self, app: &std::path::Path, tx: &mut Tx) {
+        match updater::relaunch(app) {
+            Ok(()) => tx.quit(),
+            Err(error) => {
+                eprintln!("Caffettino restart: {error}");
+                self.updates.message = Some("Couldn't restart. Quit and reopen Caffettino.".into());
+            }
+        }
+    }
+
+    /// The window's update line: its text and, when there's something to do, a button.
+    fn update_line(&self) -> Option<(String, Option<&'static str>)> {
+        if self.updates.checking && self.updates.manual {
+            return Some(("Checking for updates…".into(), None));
+        }
+        let message = self.updates.message.clone();
+        Some(match &self.updates.latest {
+            Some(Update::Installing(version)) => {
+                (format!("Installing Caffettino {version}…"), None)
+            }
+            Some(Update::Ready(version, _)) if self.active() => (
+                format!("Caffettino {version} is ready. Restarting ends this break."),
+                Some("Restart"),
+            ),
+            Some(Update::Ready(version, _)) => {
+                (format!("Caffettino {version} is ready."), Some("Restart"))
+            }
+            Some(Update::Available(release)) => (
+                message.unwrap_or_else(|| format!("Caffettino {} is available.", release.version)),
+                Some("Update"),
+            ),
+            Some(Update::Manual(release)) => (
+                message.unwrap_or_else(|| format!("Caffettino {} is available.", release.version)),
+                Some("Download"),
+            ),
+            None => (message?, None),
+        })
+    }
+
     fn detail(&self) -> String {
         if let Some(notice) = self.notice {
             notice.to_owned()
@@ -251,6 +444,17 @@ fn poll(state: &mut State, now: f64, tx: &mut Tx) -> bool {
                     state.notice = Some("The menu bar cup couldn't open. Please relaunch.");
                 }
             }
+        }
+        // A dev build would only ever be offered a release to install by hand.
+        if !cfg!(debug_assertions)
+            && let Some(handle) = state.handle.clone()
+        {
+            std::thread::spawn(move || {
+                loop {
+                    handle.update(|state: &mut State, _: &mut Tx| state.check_for_updates(false));
+                    std::thread::sleep(UPDATE_INTERVAL);
+                }
+            });
         }
         state.sync_tray();
         changed = true;
@@ -338,6 +542,13 @@ fn main() {
                 state.presets = Presets::default();
                 state.presets.add(90);
                 state.selection = Selection::Break(CoffeeBreak::Timed(90));
+            }),
+            ("update", |state| {
+                state.preview_active = true;
+                state.updates.latest = Some(Update::Ready(
+                    Version::parse("0.2.0").expect("a version"),
+                    "/Applications/Caffettino.app".into(),
+                ));
             }),
             ("error", |state| {
                 state.notice = Some("Couldn't change the coffee break. Try again.");
@@ -648,6 +859,92 @@ mod tests {
         drop(rt);
         let state = file_state(&dir);
         assert_eq!(state.selection, Selection::Break(CoffeeBreak::Timed(45)));
+    }
+
+    fn update_text(rt: &Runtime<State>) -> Option<String> {
+        rt.elements()
+            .into_iter()
+            .find(|el| el.key.as_deref() == Some("update-message"))
+            .and_then(|el| el.text)
+    }
+
+    #[test]
+    fn a_found_release_is_offered_once_and_never_downgraded() {
+        use updater::tests::release;
+        let mut rt = preview_runtime(State::preview());
+        assert_eq!(update_text(&rt), None, "nothing to report shows the hint");
+        rt.update(|s, _| s.found(release(Version::parse("9.1.0").unwrap(), true), true));
+        rt.frame(0.0);
+        assert_eq!(
+            update_text(&rt).as_deref(),
+            Some("Caffettino 9.1.0 is available.")
+        );
+        assert!(keys(&rt).contains(&"update-action".to_owned()));
+        rt.update(|s, _| s.found(release(Version::parse("9.0.0").unwrap(), true), true));
+        assert_eq!(
+            rt.state.updates.latest.as_ref().map(Update::version),
+            Version::parse("9.1.0"),
+            "an older release doesn't replace a newer one"
+        );
+        rt.update(|s, _| s.found(release(Version::parse("9.2.0").unwrap(), false), false));
+        assert!(matches!(rt.state.updates.latest, Some(Update::Manual(_))));
+    }
+
+    #[test]
+    fn manual_checks_report_up_to_date_and_failures() {
+        let mut state = State::preview();
+        state.updates.manual = true;
+        state.updates.checking = true;
+        assert_eq!(
+            state.update_line(),
+            Some(("Checking for updates…".into(), None))
+        );
+        state.update_checked(Ok(None));
+        assert!(!state.updates.checking);
+        let (message, action) = state.update_line().unwrap();
+        assert!(message.ends_with("is the latest."), "{message}");
+        assert_eq!(action, None);
+
+        state.updates.manual = true;
+        state.update_checked(Err(std::io::Error::other("offline")));
+        assert_eq!(
+            state.update_line(),
+            Some(("Couldn't check for updates.".into(), None))
+        );
+
+        state.updates.message = None;
+        state.update_checked(Err(std::io::Error::other("offline")));
+        assert_eq!(state.update_line(), None, "scheduled checks fail quietly");
+    }
+
+    #[test]
+    fn a_failed_install_falls_back_to_downloading_and_ready_warns_about_the_break() {
+        use updater::tests::release;
+        let version = Version::parse("9.1.0").unwrap();
+        let mut state = State::preview();
+        state.installed(release(version, true), Err(std::io::Error::other("nope")));
+        assert!(matches!(state.updates.latest, Some(Update::Manual(_))));
+        assert_eq!(
+            state.update_line(),
+            Some((
+                "Couldn't install 9.1.0. Download it instead.".into(),
+                Some("Download")
+            ))
+        );
+
+        state.installed(
+            release(version, true),
+            Ok("/Applications/Caffettino.app".into()),
+        );
+        assert_eq!(
+            state.update_line(),
+            Some(("Caffettino 9.1.0 is ready.".into(), Some("Restart")))
+        );
+        state.preview_active = true;
+        assert_eq!(
+            state.update_line().unwrap().0,
+            "Caffettino 9.1.0 is ready. Restarting ends this break."
+        );
     }
 
     #[test]

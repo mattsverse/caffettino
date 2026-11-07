@@ -1,5 +1,5 @@
 //! The native adapter Rune currently lacks on macOS. All methods run on the UI thread.
-use crate::{CoffeeBreak, Selection, State};
+use crate::{CoffeeBreak, Selection, State, Update};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
@@ -180,6 +180,20 @@ fn break_items(state: &State) -> (Vec<BreakItem>, Option<usize>) {
     (items, checked)
 }
 
+/// The update item's title, and whether picking it does anything (see `State::update_action`).
+fn update_item(state: &State) -> (String, bool) {
+    match &state.updates.latest {
+        _ if state.updates.checking => ("Checking for Updates…".into(), false),
+        None => ("Check for Updates…".into(), true),
+        Some(Update::Available(release)) => (format!("Update to {}", release.version), true),
+        Some(Update::Manual(release)) => {
+            (format!("Download Caffettino {}…", release.version), true)
+        }
+        Some(Update::Installing(version)) => (format!("Installing {version}…"), false),
+        Some(Update::Ready(version, _)) => (format!("Restart to Update to {version}"), true),
+    }
+}
+
 fn break_id(coffee_break: CoffeeBreak) -> String {
     match coffee_break {
         CoffeeBreak::Timed(minutes) => minutes.to_string(),
@@ -218,6 +232,7 @@ fn set_event_handlers(handle: AppHandle<State>) {
     }));
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| match event.id.as_ref() {
         "toggle" => handle.update(State::toggle),
+        "update" => handle.update(State::update_action),
         "show" => handle.open(),
         "quit" => handle.quit(),
         id => {
@@ -236,6 +251,7 @@ pub struct CoffeeTray {
     menu: Menu,
     status: MenuItem,
     toggle: MenuItem,
+    update: MenuItem,
     breaks: RefCell<Vec<(BreakItem, CheckMenuItem)>>,
     steam: Retained<Steam>,
     // NSControl's target is weak; keep it alive as long as the tray exists.
@@ -256,6 +272,7 @@ impl CoffeeTray {
         let status = MenuItem::new("Caffettino is resting", false, None);
         let toggle = MenuItem::with_id("toggle", "Brew a coffee", true, None);
         let show = MenuItem::with_id("show", "Open Caffettino…", true, None);
+        let update = MenuItem::with_id("update", "Check for Updates…", true, None);
         let quit = MenuItem::with_id("quit", "Quit Caffettino", true, None);
         menu.append_items(&[
             &status,
@@ -264,6 +281,7 @@ impl CoffeeTray {
             &toggle,
             &show,
             &PredefinedMenuItem::separator(),
+            &update,
             &quit,
         ])?;
         let mtm = MainThreadMarker::new().ok_or("tray creation must run on the main thread")?;
@@ -334,6 +352,7 @@ impl CoffeeTray {
             menu,
             status,
             toggle,
+            update,
             breaks: RefCell::new(Vec::new()),
             steam,
             _activation: activation,
@@ -352,6 +371,9 @@ impl CoffeeTray {
         } else {
             "Brew a coffee"
         });
+        let (update, enabled) = update_item(state);
+        self.update.set_text(update);
+        self.update.set_enabled(enabled);
         let (items, checked) = break_items(state);
         self.sync_breaks(items);
         for (index, (_, item)) in self.breaks.borrow().iter().enumerate() {

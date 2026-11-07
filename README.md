@@ -15,6 +15,9 @@ your Mac is caffeinated.
 - **Left-click the menu bar cup** to start or stop the selected break.
 - **Right-click the cup** to pick a break, start/stop, open the window, or quit.
 - Keyboard or VoiceOver activation of the menu bar cup opens the same menu.
+- Caffettino updates itself: it checks GitHub for a new release at launch and
+  every six hours. **Update** in the window (or the cup's menu) installs it, and
+  **Restart** switches to it. **Check for Updates…** in the cup's menu checks now.
 - Closing the window keeps the app in the menu bar. Escape or ⌘W closes it;
   ⌘Q or **Quit Caffettino** quits and releases its sleep assertions.
 
@@ -80,6 +83,18 @@ outside 1–1440, duplicates and presets past the three shortest are ignored. A
 file that can't be read is left alone; Caffettino starts with the defaults and,
 at its next change, keeps your file as `presets.json.bad`.
 
+### Updates
+
+Update checks ask the GitHub API for the latest stable release using the system
+`curl`. Each release ships the stapled app as `Caffettino-<version>-arm64.zip`
+next to the DMG. Installing downloads that archive next to the running app and
+unpacks it. It must pass Gatekeeper, carry the running app's Developer ID team,
+and report the release's version. Only then does it replace the app in place,
+and the running copy keeps working until you restart. Restarting quits first,
+so a running coffee break ends. Local and debug builds, translocated copies, and
+releases without the archive link to the release page instead. The Homebrew cask
+is marked `auto_updates`, so `brew upgrade` leaves updates to the app.
+
 Rune is pinned to a specific pre-release revision in `Cargo.toml`. Its native
 macOS tray backend is not implemented at that revision, so `tray-icon` supplies
 the macOS status item and menu; the window, layout, drawing, interaction, and
@@ -100,10 +115,11 @@ python3 -m unittest discover -s scripts -p 'test_*.py'
 cargo run --locked -- --snap target/resting.png --tree target/resting.json
 cargo run --locked -- --scene awake --snap target/awake.png
 cargo run --locked -- --scene timed --snap target/timed.png
+cargo run --locked -- --scene update --snap target/update.png
 ```
 
-Headless Rune renders and UI tests simulate coffee breaks; they never launch a
-tray icon or `caffeinate`. The macOS process tests briefly launch real children
+Headless Rune renders and UI tests simulate coffee breaks and updates; they
+never launch a tray icon or `caffeinate`, or reach the network. The macOS process tests briefly launch real children
 to verify start/stop, restart, ownership, and cleanup.
 
 Cargo denies Clippy's `pedantic`, `perf`, and `suspicious` lint groups. Both CI

@@ -100,9 +100,11 @@ jobs:
           RELEASE_STATE: ${{ steps.metadata.outputs.state }}
         run: |
           dmg="Caffettino-$VERSION-arm64.dmg"
+          # The in-app updater downloads the zipped app; Homebrew and people use the DMG.
+          zip="Caffettino-$VERSION-arm64.zip"
           python3 scripts/release.py cask --dmg "dist/$dmg" \
             --repository "$GITHUB_REPOSITORY" --output dist/caffettino.rb
-          (cd dist && shasum -a 256 "$dmg" > SHA256SUMS)
+          (cd dist && shasum -a 256 "$dmg" "$zip" > SHA256SUMS)
           if [[ "$RELEASE_STATE" == missing ]]; then
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
               --verify-tag --draft --title "Caffettino $VERSION" --generate-notes
@@ -110,7 +112,7 @@ jobs:
           # Replacing assets is allowed only while the release is still a draft.
           [[ "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" == true ]]
           gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-            "dist/$dmg" dist/SHA256SUMS dist/caffettino.rb
+            "dist/$dmg" "dist/$zip" dist/SHA256SUMS dist/caffettino.rb
           release_id="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)"
           # Let GitHub choose the highest stable version if an older release is retried.
           gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
@@ -136,7 +138,8 @@ jobs:
           mkdir dist
           dmg="Caffettino-$VERSION-arm64.dmg"
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir dist \
-            --pattern "$dmg" --pattern SHA256SUMS --pattern caffettino.rb
+            --pattern "$dmg" --pattern "Caffettino-$VERSION-arm64.zip" \
+            --pattern SHA256SUMS --pattern caffettino.rb
           (cd dist && sha256sum --check SHA256SUMS)
           python3 scripts/release.py cask --dmg "dist/$dmg" \
             --repository "$GITHUB_REPOSITORY" --output dist/expected.rb

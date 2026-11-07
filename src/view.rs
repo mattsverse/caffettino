@@ -316,13 +316,42 @@ fn brew_button(active: bool) -> El {
         .center()
 }
 
-fn footer(active: bool) -> El {
+/// An update to report takes the place of the menu bar hint.
+fn update_line(state: &State) -> El {
+    let Some((message, action)) = state.update_line() else {
+        return label(
+            "Menu bar cup: click to toggle · right-click for more",
+            10.0,
+            450.0,
+            MUTED,
+        );
+    };
+    let line = row()
+        .key("update")
+        .gap(6.0)
+        .center()
+        .child(label(message, 10.0, 450.0, MUTED).key("update-message"));
+    match action {
+        Some(action) => line.child(
+            el().key("update-action")
+                .role("button")
+                .label(action)
+                .focusable(true)
+                .cursor(Cursor::Pointer)
+                .on_press_tx(State::update_action)
+                .child(label(action, 10.0, 600.0, COFFEE)),
+        ),
+        None => line,
+    }
+}
+
+fn footer(state: &State) -> El {
     col()
         .w_full()
         .center()
         .gap(5.0)
         .child(label(
-            if active {
+            if state.active() {
                 "Display & Mac stay awake. Closing this keeps brewing."
             } else {
                 "Keeps your display & Mac awake while you're here."
@@ -331,12 +360,7 @@ fn footer(active: bool) -> El {
             450.0,
             MUTED,
         ))
-        .child(label(
-            "Menu bar cup: click to toggle · right-click for more",
-            10.0,
-            450.0,
-            MUTED,
-        ))
+        .child(update_line(state))
 }
 
 pub fn view(state: &State, _: &mut Cx<State>) -> El {
@@ -422,5 +446,5 @@ pub fn view(state: &State, _: &mut Cx<State>) -> El {
         )
         .child(duration)
         .child(brew_button(active))
-        .child(footer(active))
+        .child(footer(state))
 }
