@@ -22,7 +22,8 @@ jobs:
           persist-credentials: false
       - name: Install Rust
         run: |
-          rustup toolchain install 1.96.0 --profile minimal --component rustfmt --component clippy
+          rustup toolchain install 1.96.0 --profile minimal --component rustfmt --component clippy \
+            --target aarch64-apple-darwin --target x86_64-apple-darwin
           rustup override set 1.96.0
       - name: Check app and release helpers
         run: |
@@ -33,4 +34,4 @@ jobs:
           bash -n scripts/bundle.sh scripts/sign-release.sh scripts/keychain.sh
           plutil -lint assets/Info.plist
       - name: Build app bundle
-        run: bash scripts/bundle.sh
+        run: bash scripts/bundle.sh --universal

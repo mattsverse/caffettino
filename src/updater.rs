@@ -1,7 +1,7 @@
 //! Self-updates from Caffettino's own GitHub releases, fetched with the system `curl`.
-//! A release ships the notarized app as `Caffettino-<version>-arm64.zip`; installing
-//! swaps it in for the running bundle once it passes Gatekeeper and carries the running
-//! app's Developer ID team. Anything else (a local build, a translocated copy) can only
+//! A release ships the notarized universal app as `Caffettino-<version>-universal.zip`;
+//! installing swaps it in for the running bundle once it passes Gatekeeper and carries
+//! the running app's Developer ID team. Anything else (a local build, a translocated copy) can only
 //! point at the release page.
 
 use serde::Deserialize;
@@ -86,7 +86,7 @@ fn parse_latest(body: &str, current: Version) -> io::Result<Option<Release>> {
 }
 
 fn asset_name(version: Version) -> String {
-    format!("Caffettino-{version}-arm64.zip")
+    format!("Caffettino-{version}-universal.zip")
 }
 
 /// Whether `install` can swap the release in for the running app, rather than the
@@ -315,8 +315,8 @@ pub mod tests {
             "tag_name": tag,
             "html_url": format!("https://github.com/{REPOSITORY}/releases/tag/{tag}"),
             "assets": [
-                {"name": "Caffettino-0.2.0-arm64.dmg", "browser_download_url": "https://example.com/a.dmg"},
-                {"name": "Caffettino-0.2.0-arm64.zip", "browser_download_url": asset_url},
+                {"name": "Caffettino-0.2.0-universal.dmg", "browser_download_url": "https://example.com/a.dmg"},
+                {"name": "Caffettino-0.2.0-universal.zip", "browser_download_url": asset_url},
             ],
         })
         .to_string()
@@ -345,7 +345,7 @@ pub mod tests {
 
     #[test]
     fn a_newer_release_offers_its_app_archive() {
-        let url = format!("{DOWNLOADS}v0.2.0/Caffettino-0.2.0-arm64.zip");
+        let url = format!("{DOWNLOADS}v0.2.0/Caffettino-0.2.0-universal.zip");
         let release = parse_latest(&latest("v0.2.0", &url), Version(0, 1, 0))
             .unwrap()
             .unwrap();
@@ -356,7 +356,7 @@ pub mod tests {
 
     #[test]
     fn the_same_or_an_older_release_is_not_an_update() {
-        let url = format!("{DOWNLOADS}v0.2.0/Caffettino-0.2.0-arm64.zip");
+        let url = format!("{DOWNLOADS}v0.2.0/Caffettino-0.2.0-universal.zip");
         for current in [Version(0, 2, 0), Version(0, 3, 0)] {
             assert_eq!(
                 parse_latest(&latest("v0.2.0", &url), current).unwrap(),
@@ -368,7 +368,10 @@ pub mod tests {
     #[test]
     fn archives_from_elsewhere_can_only_be_downloaded_by_hand() {
         let release = parse_latest(
-            &latest("v0.2.0", "https://evil.example/Caffettino-0.2.0-arm64.zip"),
+            &latest(
+                "v0.2.0",
+                "https://evil.example/Caffettino-0.2.0-universal.zip",
+            ),
             Version(0, 1, 0),
         )
         .unwrap()

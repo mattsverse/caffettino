@@ -60,12 +60,11 @@ def cask_text(version, checksum, repository):
   version "{version}"
   sha256 "{checksum}"
 
-  url "https://github.com/{repository}/releases/download/v#{{version}}/Caffettino-#{{version}}-arm64.dmg"
+  url "https://github.com/{repository}/releases/download/v#{{version}}/Caffettino-#{{version}}-universal.dmg"
   name "Caffettino"
   desc "Whimsical menu bar app that keeps your Mac awake"
   homepage "https://github.com/{repository}"
 
-  depends_on arch: :arm64
   depends_on macos: ">= :ventura"
 
   # Caffettino updates itself in place; `brew upgrade` leaves it to that.
@@ -128,7 +127,7 @@ def main():
     elif args.command == "plist":
         write_plist(args.output, version, args.build_number)
     elif args.command == "cask":
-        expected = f"Caffettino-{version}-arm64.dmg"
+        expected = f"Caffettino-{version}-universal.dmg"
         if args.dmg.name != expected:
             raise ValueError(f"Expected DMG filename {expected!r}")
         with args.dmg.open("rb") as artifact:

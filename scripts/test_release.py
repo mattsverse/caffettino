@@ -42,10 +42,10 @@ class ReleaseTests(unittest.TestCase):
             with patch.object(release, "ROOT", root):
                 text = release.cask_text("0.1.0", checksum, "mattsverse/caffettino")
         self.assertIn(f'sha256 "{checksum}"', text)
-        self.assertIn("/mattsverse/caffettino/releases/download/v#{version}/Caffettino-#{version}-arm64.dmg", text)
+        self.assertIn("/mattsverse/caffettino/releases/download/v#{version}/Caffettino-#{version}-universal.dmg", text)
         self.assertIn('app "Caffettino.app"', text)
         self.assertIn("auto_updates true", text)
-        self.assertIn("depends_on arch: :arm64", text)
+        self.assertNotIn("depends_on arch", text)
         self.assertIn('depends_on macos: ">= :ventura"', text)
         self.assertIn('uninstall quit: "com.example.caffettino"', text)
         self.assertNotIn(".zip", text)
