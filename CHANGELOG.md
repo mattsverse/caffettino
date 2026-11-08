@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/mattsverse/caffettino/compare/v0.2.0...v0.3.0) (2026-11-08)
+
+
+### Features
+
+* ship a universal app for Intel Macs ([c1fd1dd](https://github.com/mattsverse/caffettino/commit/c1fd1ddbfc031a97517d1a211f25ca63eace2b11))
+
 ## [0.2.0](https://github.com/mattsverse/caffettino/compare/v0.1.0...v0.2.0) (2026-11-07)
 
 
