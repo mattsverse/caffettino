@@ -73,7 +73,8 @@ jobs:
       - name: Install Rust
         if: steps.metadata.outputs.state != 'published'
         run: |
-          rustup toolchain install 1.96.0 --profile minimal --component rustfmt --component clippy
+          rustup toolchain install 1.96.0 --profile minimal --component rustfmt --component clippy \
+            --target aarch64-apple-darwin --target x86_64-apple-darwin
           rustup override set 1.96.0
       - name: Check and build
         if: steps.metadata.outputs.state != 'published'
@@ -82,7 +83,7 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
           python3 -m unittest discover -s scripts -p 'test_*.py'
-          bash scripts/bundle.sh
+          bash scripts/bundle.sh --universal
       - name: Sign, notarize, and create the DMG
         if: steps.metadata.outputs.state != 'published'
         env:
@@ -99,9 +100,9 @@ jobs:
           VERSION: ${{ steps.metadata.outputs.version }}
           RELEASE_STATE: ${{ steps.metadata.outputs.state }}
         run: |
-          dmg="Caffettino-$VERSION-arm64.dmg"
+          dmg="Caffettino-$VERSION-universal.dmg"
           # The in-app updater downloads the zipped app; Homebrew and people use the DMG.
-          zip="Caffettino-$VERSION-arm64.zip"
+          zip="Caffettino-$VERSION-universal.zip"
           python3 scripts/release.py cask --dmg "dist/$dmg" \
             --repository "$GITHUB_REPOSITORY" --output dist/caffettino.rb
           (cd dist && shasum -a 256 "$dmg" "$zip" > SHA256SUMS)
@@ -136,9 +137,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir dist
-          dmg="Caffettino-$VERSION-arm64.dmg"
+          dmg="Caffettino-$VERSION-universal.dmg"
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir dist \
-            --pattern "$dmg" --pattern "Caffettino-$VERSION-arm64.zip" \
+            --pattern "$dmg" --pattern "Caffettino-$VERSION-universal.zip" \
             --pattern SHA256SUMS --pattern caffettino.rb
           (cd dist && sha256sum --check SHA256SUMS)
           python3 scripts/release.py cask --dmg "dist/$dmg" \

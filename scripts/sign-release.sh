@@ -12,15 +12,15 @@ for name in APPLE_CERTIFICATE_P12 APPLE_CERTIFICATE_PASSWORD \
     exit 1
   fi
 done
-[[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || {
-  echo 'Release signing requires an Apple Silicon Mac.' >&2
-  exit 1
-}
+[[ "$(uname -s)" == Darwin ]] || { echo 'Release signing requires macOS.' >&2; exit 1; }
 version="$(python3 scripts/release.py version --tag "${RELEASE_TAG:?}")"
 app="$PWD/dist/Caffettino.app"
 [[ -x "$app/Contents/MacOS/caffettino" ]] || { echo 'Build the app first.' >&2; exit 1; }
 [[ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app/Contents/Info.plist")" == "$version" ]]
-[[ "$(lipo -archs "$app/Contents/MacOS/caffettino")" == arm64 ]]
+lipo "$app/Contents/MacOS/caffettino" -verify_arch arm64 x86_64 || {
+  echo 'Releases must be universal; build with scripts/bundle.sh --universal.' >&2
+  exit 1
+}
 
 private_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/caffettino-signing.XXXXXX")"
 keychain="$private_dir/signing.keychain-db"
@@ -118,13 +118,13 @@ staple "$app"
 xcrun stapler validate "$app"
 spctl --assess --type execute --verbose=2 "$app"
 # The in-app updater installs this archive of the stapled app.
-ditto -c -k --keepParent "$app" "$PWD/dist/Caffettino-$version-arm64.zip"
+ditto -c -k --keepParent "$app" "$PWD/dist/Caffettino-$version-universal.zip"
 
 mkdir "$private_dir/image"
 chmod 755 "$private_dir/image"
 ditto "$app" "$private_dir/image/Caffettino.app"
 ln -s /Applications "$private_dir/image/Applications"
-dmg="$PWD/dist/Caffettino-$version-arm64.dmg"
+dmg="$PWD/dist/Caffettino-$version-universal.dmg"
 rm -f "$dmg"
 # Match Octowatch: HFS+ UDZO images have been corrupt on macOS 15 runners.
 hdiutil create -volname Caffettino -srcfolder "$private_dir/image" -fs APFS -format UDZO "$dmg"

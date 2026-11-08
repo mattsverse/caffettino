@@ -22,8 +22,8 @@ with open(os.environ["TEST_TOOL_LOG"], "a") as log:
 failure = os.environ.get("TEST_FAILURE", "")
 if name == "uname":
     print("Darwin" if args == ["-s"] else "arm64")
-elif name == "lipo":
-    print("arm64")
+elif name == "lipo" and failure == "single-arch":
+    sys.exit(1)
 elif name == "security":
     if args[0] == "create-keychain":
         pathlib.Path(args[-1]).touch()
@@ -113,7 +113,7 @@ class SigningGatesTests(unittest.TestCase):
         self.assertIn("runtime", signing)
         self.assertIn("--timestamp", signing)
         self.assertTrue(list((self.root / "dist").glob("*.dmg")))
-        update = str(self.root / f"dist/Caffettino-{release.project_version()}-arm64.zip")
+        update = str(self.root / f"dist/Caffettino-{release.project_version()}-universal.zip")
         archived = next(i for i, call in enumerate(calls) if call[0] == "ditto" and call[-1] == update)
         stapled = next(i for i, call in enumerate(calls) if call[:3] == ["xcrun", "stapler", "staple"])
         self.assertLess(stapled, archived, "the updater's archive holds the stapled app")
@@ -171,6 +171,12 @@ class SigningGatesTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("for APPLE_TEAM_ID", result.stderr)
         self.assertFalse(any(call[0] == "codesign" for call in calls))
+
+    def test_single_architecture_app_is_rejected_before_importing_credentials(self):
+        result, calls = self.run_signing("single-arch")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Releases must be universal", result.stderr)
+        self.assertFalse(any(call[0] == "security" for call in calls))
 
     def test_missing_secret_fails_before_importing_credentials(self):
         self.environment.pop("APPLE_APP_SPECIFIC_PASSWORD")

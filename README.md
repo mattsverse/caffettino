@@ -23,7 +23,7 @@ your Mac is caffeinated.
 
 ## Run
 
-Release installation (Apple Silicon, macOS 13+, available after the first release):
+Release installation (Apple Silicon or Intel, macOS 13+):
 
 ```sh
 brew install --cask mattsverse/tap/caffettino
@@ -44,8 +44,11 @@ bash scripts/bundle.sh
 open dist/Caffettino.app
 ```
 
-You can move `dist/Caffettino.app` into Applications. This local build doesn't
-include Developer ID signing or notarization for distribution.
+You can move `dist/Caffettino.app` into Applications. This builds for your Mac
+only; `bash scripts/bundle.sh --universal` builds for Apple Silicon and Intel
+like releases do (it needs `rustup target add aarch64-apple-darwin
+x86_64-apple-darwin`). This local build doesn't include Developer ID signing or
+notarization for distribution.
 
 Release Please creates version and changelog PRs from conventional commits.
 Merging a release PR runs GitHub Actions: Developer ID signing, Apple
@@ -86,8 +89,8 @@ at its next change, keeps your file as `presets.json.bad`.
 ### Updates
 
 Update checks ask the GitHub API for the latest stable release using the system
-`curl`. Each release ships the stapled app as `Caffettino-<version>-arm64.zip`
-next to the DMG. Installing downloads that archive next to the running app and
+`curl`. Each release ships the stapled universal app as
+`Caffettino-<version>-universal.zip` next to the DMG. Installing downloads that archive next to the running app and
 unpacks it. It must pass Gatekeeper, carry the running app's Developer ID team,
 and report the release's version. Only then does it replace the app in place,
 and the running copy keeps working until you restart. Restarting quits first,
