@@ -71,6 +71,7 @@ def cask_text(version, checksum, repository):
   auto_updates true
 
   app "Caffettino.app"
+  binary "#{{appdir}}/Caffettino.app/Contents/MacOS/caffettino"
 
   uninstall quit: "{bundle_identifier}"
 end

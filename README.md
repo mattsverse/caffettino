@@ -21,6 +21,29 @@ your Mac is caffeinated.
 - Closing the window keeps the app in the menu bar. Escape or ⌘W closes it;
   ⌘Q or **Quit Caffettino** quits and releases its sleep assertions.
 
+## Command line
+
+The Homebrew cask also installs a `caffettino` command (from a source build, it's
+`Caffettino.app/Contents/MacOS/caffettino`):
+
+```sh
+caffettino start       # until you stop it
+caffettino start 25    # a saved preset: 25, 25m, 1h or 1h30
+caffettino status
+caffettino stop
+```
+
+The command doesn't run `caffeinate` itself. It asks the running app, which
+starts or stops its own break: the same `caffeinate` child the window and menu
+bar control, watching the app's pid. A break started from the terminal shows in
+the window and menu bar, and either side can stop it. `start` opens Caffettino
+in the background if it isn't running. A time must be one of your presets, and
+it becomes the selected break. While a break is brewing, `start` with a
+different time is refused; stop it first. `stop` and `status` never open the
+app. The app answers on a socket only you can use:
+`~/Library/Application Support/com.matteogassend.caffettino/caffettino.sock`.
+Commands exit 0 on success, 1 when refused or failed, and 2 for bad usage.
+
 ## Run
 
 Release installation (Apple Silicon or Intel, macOS 13+):
@@ -122,7 +145,7 @@ cargo run --locked -- --scene update --snap target/update.png
 ```
 
 Headless Rune renders and UI tests simulate coffee breaks and updates; they
-never launch a tray icon or `caffeinate`, or reach the network. The macOS process tests briefly launch real children
+never launch a tray icon or `caffeinate`, or reach the network. Command-line tests talk to a throwaway socket. The macOS process tests briefly launch real children
 to verify start/stop, restart, ownership, and cleanup.
 
 Cargo denies Clippy's `pedantic`, `perf`, and `suspicious` lint groups. Both CI
