@@ -44,6 +44,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn(f'sha256 "{checksum}"', text)
         self.assertIn("/mattsverse/caffettino/releases/download/v#{version}/Caffettino-#{version}-universal.dmg", text)
         self.assertIn('app "Caffettino.app"', text)
+        self.assertIn('binary "#{appdir}/Caffettino.app/Contents/MacOS/caffettino"', text)
         self.assertIn("auto_updates true", text)
         self.assertNotIn("depends_on arch", text)
         self.assertIn('depends_on macos: ">= :ventura"', text)

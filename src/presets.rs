@@ -27,6 +27,17 @@ pub fn parse_minutes(text: &str) -> Option<u32> {
     text.parse().ok().filter(|&minutes| in_range(minutes))
 }
 
+/// `~/Library/Application Support/<bundle id>`, where the app keeps its files.
+pub fn support_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(|home| {
+            PathBuf::from(home)
+                .join("Library/Application Support")
+                .join(BUNDLE_ID)
+        })
+}
+
 fn in_range(minutes: u32) -> bool {
     (MIN_MINUTES..=MAX_MINUTES).contains(&minutes)
 }
@@ -171,16 +182,7 @@ impl Store {
 
     /// `~/Library/Application Support/<bundle id>/presets.json`, or memory without a home.
     pub fn open() -> Self {
-        std::env::var_os("HOME")
-            .filter(|home| !home.is_empty())
-            .map_or(Self::Memory, |home| {
-                Self::at(
-                    PathBuf::from(home)
-                        .join("Library/Application Support")
-                        .join(BUNDLE_ID)
-                        .join(FILE),
-                )
-            })
+        support_dir().map_or(Self::Memory, |dir| Self::at(dir.join(FILE)))
     }
 
     pub fn load(&mut self) -> Loaded {

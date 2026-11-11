@@ -1,5 +1,6 @@
 mod caffeine;
 mod presets;
+mod remote;
 #[cfg(target_os = "macos")]
 mod tray;
 mod updater;
@@ -98,7 +99,124 @@ impl State {
             state.notice = Some("Couldn't read presets.json — using defaults.");
         }
         state.handle = Some(handle);
+        if !preview {
+            state.answer_command_line();
+        }
         state
+    }
+
+    /// Lets `caffettino start|stop|status` drive this copy's coffee break.
+    fn answer_command_line(&self) {
+        let (Some(handle), Some(dir)) = (self.handle.clone(), presets::support_dir()) else {
+            return;
+        };
+        let listening = remote::listen(&remote::socket_path(&dir), move |request, reply| {
+            handle.update(move |state: &mut State, tx: &mut Tx| {
+                let _ = reply.send(state.answer(request, tx));
+            });
+        });
+        if let Err(error) = listening {
+            eprintln!("Caffettino command line: {error}");
+        }
+    }
+
+    /// Answers the command line with the same coffee break the window and menu bar control.
+    fn answer(&mut self, request: remote::Request, tx: &mut Tx) -> remote::Reply {
+        if self.preview {
+            return Err("Previews don't brew.".into());
+        }
+        // Notice a break that ended since the last health check before describing it.
+        if matches!(self.caffeine.refresh(), Ok(true)) {
+            self.notice = Some("Coffee break's over. Sweet dreams, Mac.");
+            self.changed(tx);
+        }
+        match request {
+            remote::Request::Status => Ok(self.status_line()),
+            remote::Request::Stop if !self.active() => Ok(self.status_line()),
+            remote::Request::Stop => {
+                self.notice = None;
+                let stopped = self.caffeine.stop();
+                self.changed(tx);
+                stopped.map_err(|error| {
+                    eprintln!("Caffettino: {error}");
+                    "Couldn't stop the coffee break. Try again.".to_owned()
+                })?;
+                Ok("Snoozing. Your Mac can sleep when it likes.".into())
+            }
+            remote::Request::Start(minutes) => self.brew_from_command_line(minutes, tx),
+        }
+    }
+
+    fn brew_from_command_line(&mut self, minutes: Option<u32>, tx: &mut Tx) -> remote::Reply {
+        let coffee_break = match minutes {
+            None => CoffeeBreak::Unlimited,
+            Some(minutes) if self.presets.contains(minutes) => CoffeeBreak::Timed(minutes),
+            Some(minutes) => {
+                return Err(format!(
+                    "{} isn't one of your presets: {}.",
+                    format_minutes(u64::from(minutes)),
+                    self.preset_list()
+                ));
+            }
+        };
+        if self.active() {
+            return if minutes.is_none() || self.coffee_break() == Some(coffee_break) {
+                Ok(self.status_line())
+            } else {
+                Err(format!(
+                    "Already brewing. Stop it first to brew {}.",
+                    coffee_break.label()
+                ))
+            };
+        }
+        self.notice = None;
+        let started = self.caffeine.start(coffee_break);
+        if started.is_ok() && self.selection != Selection::Break(coffee_break) {
+            // The window and menu bar show what's brewing as the selected break.
+            self.selection = Selection::Break(coffee_break);
+            self.persist();
+        }
+        self.changed(tx);
+        started.map_err(|error| {
+            eprintln!("Caffettino: {error}");
+            "Couldn't start the coffee break. Try again.".to_owned()
+        })?;
+        Ok(self.status_line())
+    }
+
+    fn status_line(&self) -> String {
+        if !self.active() {
+            return "Resting. Your Mac can snooze.".into();
+        }
+        match self.caffeine.minutes_left() {
+            Some(minutes) => format!("Brewing: {} left.", format_minutes(minutes)),
+            None => "Brewing until you stop it.".into(),
+        }
+    }
+
+    /// The breaks `start` takes, as a person would type them.
+    fn preset_list(&self) -> String {
+        let presets: Vec<String> = self
+            .presets
+            .minutes()
+            .iter()
+            .map(|&minutes| format_minutes(u64::from(minutes)))
+            .collect();
+        if presets.is_empty() {
+            "none saved, so leave the time out to brew until you stop".into()
+        } else {
+            presets.join(", ")
+        }
+    }
+
+    /// Shows a coffee break that started or stopped, and keeps its health check running.
+    fn changed(&mut self, tx: &mut Tx) {
+        self.minutes_left = self.caffeine.minutes_left();
+        self.sync_tray();
+        if !self.preview && self.active() {
+            // Ensure poll runs after this handler, even if the window is hidden.
+            tx.wake_after(Duration::ZERO);
+        }
     }
 
     /// A saved one-off break comes back typed into the "+" field, never running.
@@ -161,12 +279,7 @@ impl State {
             // A one-off break is remembered once it has been brewed.
             self.persist();
         }
-        self.minutes_left = self.caffeine.minutes_left();
-        self.sync_tray();
-        if !self.preview && self.active() {
-            // Ensure poll runs after this handler, even if the window is hidden.
-            tx.wake_after(Duration::ZERO);
-        }
+        self.changed(tx);
     }
 
     fn open_window(&self) {
@@ -515,6 +628,10 @@ fn on_key(state: &mut State, key: &KeyEvent, tx: &mut Tx) -> bool {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if remote::is_command(&args) {
+        std::process::exit(remote::run(&args));
+    }
     let preview = rune::tooling::Args::parse().headless();
     if !cfg!(target_os = "macos") && !preview {
         eprintln!("Caffettino's menu bar and caffeinate command require macOS.");
@@ -705,6 +822,63 @@ mod tests {
         assert!(
             rt.wake_deadline().is_none(),
             "stopping lets the event loop sleep"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_command_line_drives_the_apps_own_break_and_only_brews_presets() {
+        use remote::Request::{Start, Status, Stop};
+        let mut rt = Runtime::new(
+            State {
+                tray_attempted: true,
+                ..State::default()
+            },
+            view::view,
+            view::SIZE,
+            Env::new(false, 1.0),
+        );
+        rt.poll = Some(poll);
+        rt.frame(0.0);
+        let ask = |rt: &mut Runtime<State>, request| {
+            let mut reply = None;
+            rt.update(|state, tx| reply = Some(state.answer(request, tx)));
+            rt.frame(0.0);
+            reply.unwrap()
+        };
+        assert_eq!(
+            ask(&mut rt, Status),
+            Ok("Resting. Your Mac can snooze.".into())
+        );
+        let refused = ask(&mut rt, Start(Some(40))).unwrap_err();
+        assert_eq!(refused, "40 min isn't one of your presets: 25 min, 1 h.");
+        assert!(!rt.state.active());
+
+        assert_eq!(
+            ask(&mut rt, Start(Some(60))),
+            Ok("Brewing: 1 h left.".into())
+        );
+        assert!(rt.state.caffeine.active(), "the app's own child is brewing");
+        assert_eq!(rt.state.selection, Selection::Break(CoffeeBreak::Timed(60)));
+        assert!(rt.wake_deadline().is_some(), "health checks run");
+        assert!(ask(&mut rt, Start(None)).is_ok(), "brewing already");
+        assert!(
+            ask(&mut rt, Start(Some(25))).is_err(),
+            "not a different break"
+        );
+
+        click(&mut rt, "brew");
+        assert!(!rt.state.active(), "the window stops a command-line break");
+        assert_eq!(
+            ask(&mut rt, Start(None)),
+            Ok("Brewing until you stop it.".into())
+        );
+        assert_eq!(rt.state.selection, Selection::Break(CoffeeBreak::Unlimited));
+        assert!(ask(&mut rt, Stop).unwrap().starts_with("Snoozing."));
+        assert!(!rt.state.caffeine.active());
+        assert_eq!(
+            ask(&mut rt, Stop),
+            Ok("Resting. Your Mac can snooze.".into())
         );
     }
 
