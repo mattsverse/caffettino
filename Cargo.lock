@@ -479,7 +479,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "caffettino"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
