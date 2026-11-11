@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/mattsverse/caffettino/compare/v0.3.0...v0.4.0) (2026-11-11)
+
+
+### Features
+
+* add a command line that drives the app's coffee break ([ae1d12f](https://github.com/mattsverse/caffettino/commit/ae1d12f602a5f53d769262efa8c1242fb0ba636f))
+* add a command line that drives the app's coffee break ([0cdef0c](https://github.com/mattsverse/caffettino/commit/0cdef0ce7c84d41b8461b856bd9b08a526f42b98))
+
 ## [0.3.0](https://github.com/mattsverse/caffettino/compare/v0.2.0...v0.3.0) (2026-11-08)
 
 
